@@ -1138,9 +1138,6 @@ class F5PluginDriver(abstract_driver.LoadBalancerAbstractDriver):
                 'status': q_const.PORT_STATUS_ACTIVE
         }
         port_data[portbindings.HOST_ID] = agent['host']
-        self.plugin._core_plugin.update_port(context,
-                                      vip['port_id'],
-                                      {'port': port_data})
         # call the RPC proxy with the constructed message
         self.agent_rpc.create_vip(context, vip, service, agent['host'])
 
