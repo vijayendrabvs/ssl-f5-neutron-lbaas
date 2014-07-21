@@ -29,6 +29,7 @@ import hashlib
 import random
 from time import time
 import logging as std_logging
+import hashlib
 
 
 LOG = logging.getLogger(__name__)
@@ -223,6 +224,9 @@ def check_monitor_delete(service):
         for monitor in service['pool']['health_monitors_status']:
             monitor['status'] = plugin_const.PENDING_DELETE
 
+def md5hash(input_string):
+     return hashlib.md5(input_string).hexdigest()
+
 
 class iControlDriver(object):
 
@@ -293,6 +297,26 @@ class iControlDriver(object):
     def sync(self, service):
         self._assure_service_networks(service)
         self._assure_service(service)
+
+    @serialized('associate_vip_ssl_cert')
+    @is_connected
+    def associate_vip_ssl_cert(self, assoc_db_record, ssl_cert_db_record,
+                               ssl_cert_chain_db_record, ssl_key_db_record,
+                               vip_db_record, service):
+        self._assure_service(service)
+        self._associate_vip_ssl_cert(assoc_db_record, ssl_cert_db_record,
+                                     ssl_cert_chain_db_record, ssl_key_db_record,
+                                     vip_db_record, service)
+
+    @serialized('disassociate_vip_ssl_cert')
+    @is_connected
+    def disassociate_vip_ssl_cert(self, assoc_db_record, ssl_cert_db_record,
+                               ssl_cert_chain_db_record, ssl_key_db_record,
+                               vip_db_record, service):
+        self._assure_service(service)
+        self._disassociate_vip_ssl_cert(assoc_db_record, ssl_cert_db_record,
+                                     ssl_cert_chain_db_record, ssl_key_db_record,
+                                     vip_db_record, service)
 
     @serialized('create_vip')
     @is_connected
@@ -445,6 +469,117 @@ class iControlDriver(object):
                                     members[member['id']] = 'DOWN'
         stats['members'] = {'members': members}
         return stats
+
+    def _associate_vip_ssl_cert(self, assoc_db_record, ssl_cert_db_record,
+                                ssl_cert_chain_db_record, ssl_key_db_record,
+                                vip_db_record, service):
+        if not service['pool']:
+            return
+        bigip = self._get_bigip()
+        if self.conf.sync_mode == 'replication':
+            bigips = bigip.group_bigips
+        else:
+            bigips = [bigip]
+
+        start_time = time()
+        assoc_id = assoc_db_record['id']
+        vip_id = vip_db_record['id']
+        key = ssl_key_db_record['key']
+        #TODO: Can tenant_id be null?
+        folder = "uuid_" + vip_db_record['tenant_id']
+        ssl_cert = ssl_cert_db_record['certificate']
+        # The client ssl profile name always needs to begin with "uuid_" on
+        # an F5 LB. This is probably a bug on the F5 and needs
+        # to be fixed by F5. We're working around it.
+        ssl_cert_id = ssl_cert_db_record['id']
+        cert_name = "cert_uuid_" + ssl_cert_id
+        cert_chain = ssl_cert_chain_db_record['cert_chain']
+        cert_chain_name = None
+        if cert_chain:
+            cert_chain_name = "cert_chain_uuid_" + ssl_cert_id
+        for lb in bigips:
+            on_last_lb = (lb is bigips[-1])
+            try:
+                # Sanitize the ssl_cert and key for \\n.
+                lb.ssl.import_ssl_cert(ssl_cert.replace('\\n', '\n'), key.replace('\\n', '\n'), cert_name, folder)
+                if cert_chain:
+                    lb.ssl.import_intermediate_cert(cert_chain.replace('\\n', '\n'), cert_chain_name, folder)
+                # Generate a client ssl profile name
+                #cssl_profile_name = "uuid_cssl_profile_" + ssl_cert_id + "_" + md5hash(ssl_cert+cert_chain+key)
+                cssl_profile_name = "uuid_cssl_profile_" + assoc_id
+                lb.ssl.create_cssl_profile(cssl_profile_name, cert_name, cert_chain_name, folder)
+                # Finally, associate the cssl profile with the vip.
+                # F5 creates a "uuid_""vip_id" on the device. So, use the same naming
+                # convention.
+                vip_name = "uuid_" + vip_id
+                device_ip = lb.device.get_mgmt_addr() 
+                lb.ssl.associate_cssl_profile(vip_name, cssl_profile_name, folder)
+                if on_last_lb:
+                    self.plugin_rpc.update_vip_ssl_cert_assoc_status(
+                                assoc_id,
+                                status=plugin_const.ACTIVE,
+                                status_description='associated on device',
+                                device_ip=device_ip)
+            except Exception as e:
+                self.plugin_rpc.update_vip_ssl_cert_assoc_status(
+                            assoc_id,
+                            status=plugin_const.ERROR,
+                            status_description='Failed to apply certificate on device',
+                            device_ip=device_ip)
+                raise f5ex.ImportSSLCertFailedException(e.message)
+        LOG.debug("    _associate_vip_ssl_cert took %.5f secs" %
+              (time() - start_time))
+        return
+
+    def _disassociate_vip_ssl_cert(self, assoc_db_record, ssl_cert_db_record,
+                                ssl_cert_chain_db_record, ssl_key_db_record,
+                                vip_db_record, service):
+        if not service['pool']:
+            return
+        bigip = self._get_bigip()
+        if self.conf.sync_mode == 'replication':
+            bigips = bigip.group_bigips
+        else:
+            bigips = [bigip]
+
+        start_time = time()
+        assoc_id = assoc_db_record['id']
+        vip_id = vip_db_record['id']
+        key = ssl_key_db_record['key']
+        #TODO: Can tenant_id be null?
+        folder = "uuid_" + vip_db_record['tenant_id']
+        ssl_cert = ssl_cert_db_record['certificate']
+        # The client ssl profile name always needs to begin with "uuid_" on
+        # an F5 LB. This is probably a bug on the F5 and needs
+        # to be fixed by F5. We're working around it.
+        ssl_cert_id = ssl_cert_db_record['id']
+        cert_name = "cert_uuid_" + ssl_cert_id
+        if bool(ssl_cert_chain_db_record):
+            #Non empty
+            cert_chain = ssl_cert_chain_db_record['cert_chain']
+        else:
+            cert_chain = None
+        for lb in bigips:
+            on_last_lb = (lb is bigips[-1])
+            try:
+                # Generate the client ssl profile name in the same way
+                # we generated it when creating this profile.
+                #cssl_profile_name = "uuid_cssl_profile_" + ssl_cert_id + "_" + md5hash(ssl_cert+cert_chain+key)
+                cssl_profile_name = "uuid_cssl_profile_" + assoc_id
+                vip_name = "uuid_" + vip_id
+                lb.ssl.disassociate_cssl_profile(vip_name, cssl_profile_name, folder)
+                if on_last_lb:
+                    self.plugin_rpc.delete_vip_ssl_cert_assoc(assoc_id)
+            except Exception as e:
+                self.plugin_rpc.update_vip_ssl_cert_assoc_status(
+                            assoc_id,
+                            status=plugin_const.ERROR,
+                            status_description='Failed to disassociate vip and certificate on device', device_ip=None)
+                raise f5ex.DisassociateSSLCertFailedException(e.message)
+        LOG.debug("    _associate_vip_ssl_cert took %.5f secs" %
+              (time() - start_time))
+        return
+
 
     def remove_orphans(self, known_pool_ids):
         raise NotImplementedError()

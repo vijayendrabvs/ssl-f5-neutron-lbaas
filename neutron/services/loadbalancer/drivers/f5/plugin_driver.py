@@ -25,6 +25,7 @@ from neutron.openstack.common.rpc import proxy
 from neutron.plugins.common import constants
 from neutron.extensions import portbindings
 from neutron.services.loadbalancer.drivers import abstract_driver
+from neutron.services.loadbalancer.drivers import abstract_ssl_extension_driver
 from neutron.context import get_admin_context
 from time import time
 
@@ -899,6 +900,23 @@ class LoadBalancerCallbacks(object):
                                         endpoints.append(ip)
         return endpoints
 
+    @log.log
+    def update_vip_ssl_cert_assoc_status(self, context,
+                                         assoc_id,
+                                         status=constants.ERROR,
+                                         status_description=None,
+                                         device_ip=None):
+                                         #host=None):
+        """ Agent confirmation hook to update vip-sslcert association status """
+        self.plugin.update_vip_ssl_cert_assoc_status(context,
+                                                     assoc_id,
+                                                     status, status_description, device_ip)
+
+    @log.log
+    def delete_vip_ssl_cert_assoc(self, context, assoc_id):
+        self.plugin.delete_vip_ssl_cert_assoc(context, assoc_id)
+
+
     def _get_gre_endpoints(self, context, host=None):
         endpoints = []
         for agent in self.plugin._core_plugin.get_agents(context):
@@ -1051,6 +1069,38 @@ class LoadBalancerAgentApi(proxy.RpcProxy):
         )
 
     @log.log
+    def associate_vip_ssl_cert(self, context, assoc_db_record, cert_db_record,
+                               cert_chain_db_record, key_db_record,
+                               vip_db_record, host, service):
+        return self.cast(
+            context,
+            self.make_msg('associate_vip_ssl_cert',
+                          assoc_db_record=assoc_db_record,
+                          ssl_cert_db_record=cert_db_record,
+                          ssl_cert_chain_db_record=cert_chain_db_record,
+                          ssl_key_db_record=key_db_record,
+                          vip_db_record=vip_db_record, service=service),
+            topic='%s.%s' % (self.topic, host)
+        )
+
+    @log.log
+    def disassociate_vip_ssl_cert(self, context, assoc_db_record, cert_db_record,
+                               key_db_record, vip_db_record, host, service,
+                               cert_chain_db_record=None):
+        if not cert_chain_db_record:
+            cert_chain_db_record = {}
+        return self.cast(
+            context,
+            self.make_msg('disassociate_vip_ssl_cert',
+                          assoc_db_record=assoc_db_record,
+                          ssl_cert_db_record=cert_db_record,
+                          ssl_cert_chain_db_record=cert_chain_db_record,
+                          ssl_key_db_record=key_db_record,
+                          vip_db_record=vip_db_record, service=service),
+            topic='%s.%s' % (self.topic, host)
+        )
+
+    @log.log
     def agent_updated(self, context, admin_state_up, host):
         return self.cast(
             context,
@@ -1070,7 +1120,8 @@ class LoadBalancerAgentApi(proxy.RpcProxy):
                          )
 
 
-class F5PluginDriver(abstract_driver.LoadBalancerAbstractDriver):
+class F5PluginDriver(abstract_driver.LoadBalancerAbstractDriver,
+                     abstract_ssl_extension_driver.LBaaSAbstractSSLDriver):
     """ Plugin Driver for LBaaS.
 
         This class implements the methods found in the abstract
@@ -1138,6 +1189,9 @@ class F5PluginDriver(abstract_driver.LoadBalancerAbstractDriver):
                 'status': q_const.PORT_STATUS_ACTIVE
         }
         port_data[portbindings.HOST_ID] = agent['host']
+        #self.plugin._core_plugin.update_port(context,
+        #                              vip['port_id'],
+        #                              {'port': port_data})
         # call the RPC proxy with the constructed message
         self.agent_rpc.create_vip(context, vip, service, agent['host'])
 
@@ -1397,6 +1451,58 @@ class F5PluginDriver(abstract_driver.LoadBalancerAbstractDriver):
         self.agent_rpc.delete_pool_health_monitor(context, health_monitor,
                                                   pool, service,
                                                   agent['host'])
+
+    @log.log
+    def create_vip_ssl_certificate_association(self, context, assoc_db_record,
+                                               cert_db_record,key_db_record,
+                                               vip_db_record, cert_chain_db_record=None):
+        # For now, we allow only one ssl cert to be associated with a vip at one time.
+        # which agent should handle provisioning
+        pool_id = vip_db_record['pool_id']
+        agent = self.get_pool_agent(context, pool_id)
+
+        # populate a pool structure for the rpc message
+        pool = self._get_pool(context, pool_id)
+
+        # get the complete service definition from the data model
+        # service is a current cache entry for a vip.
+        service = self.callbacks.get_service_by_pool_id(context,
+                            pool_id=pool_id,
+                            global_routed_mode=self._is_global_routed(agent),
+                            activate=False,
+                            host=agent['host'])
+
+        # As of now, we don't support ssl policies or trusted certs.
+        # call the RPC proxy with the constructed message
+        self.agent_rpc.associate_vip_ssl_cert(context, assoc_db_record, cert_db_record,
+                                                  cert_chain_db_record, key_db_record,
+                                                  vip_db_record, agent['host'], service)
+
+    @log.log
+    def delete_vip_ssl_certificate_association(self, context, assoc_db_record,
+                                               cert_db_record, key_db_record,
+                                               vip_db_record, cert_chain_db_record=None):
+        pool_id = vip_db_record['pool_id']
+        agent = self.get_pool_agent(context, pool_id)
+
+        # populate a pool structure for the rpc message
+        pool = self._get_pool(context, pool_id)
+
+        # get the complete service definition from the data model
+        # service is a current cache entry for a vip.
+        service = self.callbacks.get_service_by_pool_id(context,
+                            pool_id=pool_id,
+                            global_routed_mode=self._is_global_routed(agent),
+                            activate=False,
+                            host=agent['host'])
+
+        self.agent_rpc.disassociate_vip_ssl_cert(context, assoc_db_record, cert_db_record,
+                                                  key_db_record, vip_db_record, agent['host'],
+                                                  service, cert_chain_db_record)
+
+    @log.log
+    def update_ssl_certificate(self, context):
+        pass
 
     @log.log
     def stats(self, context, pool_id):

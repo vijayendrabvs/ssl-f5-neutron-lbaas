@@ -6,6 +6,8 @@
 # Copyright 2014 by F5 Networks and/or its suppliers. All rights reserved.
 ##############################################################################
 
+class ImportSSLCertFailedException(Exception):
+    pass
 
 class MinorVersionValidateFailed(Exception):
     pass
@@ -44,4 +46,7 @@ class MissingVTEPAddress(Exception):
 
 
 class InvalidNetworkType(Exception):
+    pass
+
+class DisassociateSSLCertFailedException(Exception):
     pass

@@ -30,6 +30,7 @@ from f5.bigip.bigip_interfaces.vlan import Vlan
 from f5.bigip.bigip_interfaces.vxlan import VXLAN
 from f5.bigip.bigip_interfaces.l2gre import L2GRE
 from f5.bigip.bigip_interfaces.arp import ARP
+from f5.bigip.bigip_interfaces.ssl import SSL
 
 LOG = logging.getLogger(__name__)
 
@@ -38,8 +39,23 @@ class BigIP(object):
     def __init__(self, hostname, username, password,
                  timeout=None, address_isolation=True,
                  strict_route_isolation=False):
+
+        # SOAP resource for BIG-IP that select requests will use
+        self.iControlSoapInterfaces = [
+            'Management.KeyCertificate',
+            'System.Session'
+        ]
         # get icontrol connection stub
-        self.icontrol = self._get_icontrol(hostname, username, password)
+        self.icontrol = self._get_icontrol(hostname, username, password, timeout, self.iControlSoapInterfaces)
+
+        # REST resource for BIG-IP that all requests will use
+        self.bigipREST = requests.session()
+        self.bigipREST.auth = (username, password)
+        self.bigipREST.verify = False
+        self.bigipREST.headers.update({'Content-Type' : 'application/json'})
+
+        # Requests requires a full URL to be sent as arg for every request, define base URL globally here
+        self.bigipREST_url_base = 'https://%s/mgmt/tm' % hostname
 
         self.icr_session = requests.session()
         self.icr_session.auth = (username, password)
@@ -60,6 +76,15 @@ class BigIP(object):
         self.interfaces = {}
         self.group_bigips = []
         self.sync_mode = const.DEFAULT_SYNC_MODE
+
+    @property
+    def ssl(self):
+        if 'ssl' in self.interfaces:
+            return self.interfaces['ssl']
+        else:
+            ssl = SSL(self)
+            self.interfaces['ssl'] = ssl
+            return ssl
 
     @property
     def system(self):
@@ -250,7 +275,7 @@ class BigIP(object):
             return self.route.get_domain(folder=folder)
 
     @staticmethod
-    def _get_icontrol(hostname, username, password, timeout=None):
+    def _get_icontrol(hostname, username, password, timeout=None, iControlSoapInterfaces=None):
         #Logger.log(Logger.DEBUG,
         #           "Opening iControl connections to %s for interfaces %s"
         #            % (self.hostname, self.interfaces))
@@ -260,13 +285,13 @@ class BigIP(object):
                                 username=username,
                                 password=password,
                                 directory=const.WSDL_CACHE_DIR,
-                                wsdls=[])
+                                wsdls=iControlSoapInterfaces)
         else:
             icontrol = pc.BIGIP(hostname=hostname,
                                 username=username,
                                 password=password,
                                 fromurl=True,
-                                wsdls=[])
+                                wsdls=iControlSoapInterfaces)
 
         if timeout:
             icontrol.set_timeout(timeout)

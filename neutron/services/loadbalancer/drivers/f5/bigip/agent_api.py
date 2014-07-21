@@ -292,3 +292,33 @@ class LbaasAgentApi(proxy.RpcProxy):
             ),
             topic=self.topic
         )
+
+    @log.log
+    def update_vip_ssl_cert_assoc_status(self, assoc_id,
+                                                status,
+                                                status_description=None,
+                                                device_ip=None):
+        return self.call(
+                         self.context,
+                         self.make_msg(
+                                       'update_vip_ssl_cert_assoc_status',
+                                       assoc_id=assoc_id,
+                                       status=status,
+                                       status_description=status_description,
+                                       device_ip=device_ip
+                                       #host=self.host
+                                      ),
+                        topic=self.topic
+                )
+
+
+    @log.log
+    def delete_vip_ssl_cert_assoc(self, assoc_id):
+        return self.call(
+                         self.context,
+                         self.make_msg(
+                                       'delete_vip_ssl_cert_assoc',
+                                       assoc_id=assoc_id
+                                      ),
+                        topic=self.topic
+                )
