@@ -29,7 +29,6 @@ import hashlib
 import random
 from time import time
 import logging as std_logging
-import hashlib
 
 
 LOG = logging.getLogger(__name__)
@@ -223,9 +222,6 @@ def check_monitor_delete(service):
             member['status'] = plugin_const.PENDING_DELETE
         for monitor in service['pool']['health_monitors_status']:
             monitor['status'] = plugin_const.PENDING_DELETE
-
-def md5hash(input_string):
-     return hashlib.md5(input_string).hexdigest()
 
 
 class iControlDriver(object):
@@ -505,7 +501,6 @@ class iControlDriver(object):
                 if cert_chain:
                     lb.ssl.import_intermediate_cert(cert_chain.replace('\\n', '\n'), cert_chain_name, folder)
                 # Generate a client ssl profile name
-                #cssl_profile_name = "uuid_cssl_profile_" + ssl_cert_id + "_" + md5hash(ssl_cert+cert_chain+key)
                 cssl_profile_name = "uuid_cssl_profile_" + assoc_id
                 lb.ssl.create_cssl_profile(cssl_profile_name, cert_name, cert_chain_name, folder)
                 # Finally, associate the cssl profile with the vip.
@@ -564,7 +559,6 @@ class iControlDriver(object):
             try:
                 # Generate the client ssl profile name in the same way
                 # we generated it when creating this profile.
-                #cssl_profile_name = "uuid_cssl_profile_" + ssl_cert_id + "_" + md5hash(ssl_cert+cert_chain+key)
                 cssl_profile_name = "uuid_cssl_profile_" + assoc_id
                 vip_name = "uuid_" + vip_id
                 lb.ssl.disassociate_cssl_profile(vip_name, cssl_profile_name, folder)
