@@ -108,7 +108,7 @@ class System(object):
 
     # TODO: this belongs in a higher level cluster abstraction
     def _create_folder_and_domain(self, folder, bigip):
-        if bigip.sync_mode == 'replication':
+        if bigip.sync_mode != 'replication':
             # presumably whatever is operating on the current bigip
             # will do the same on every bigip, so no need to replicate
             bigip.system.create_folder(folder, change_to=True)
