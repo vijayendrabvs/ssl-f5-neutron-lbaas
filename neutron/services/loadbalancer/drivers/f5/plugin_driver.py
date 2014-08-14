@@ -1086,7 +1086,8 @@ class LoadBalancerAgentApi(proxy.RpcProxy):
     @log.log
     def disassociate_vip_ssl_cert(self, context, assoc_db_record, cert_db_record,
                                key_db_record, vip_db_record, host, service,
-                               cert_chain_db_record=None):
+                               cert_chain_db_record=None, cert_delete_flag=True,
+                               cert_chain_delete_flag=True, key_delete_flag=True):
         if not cert_chain_db_record:
             cert_chain_db_record = {}
         return self.cast(
@@ -1096,7 +1097,11 @@ class LoadBalancerAgentApi(proxy.RpcProxy):
                           ssl_cert_db_record=cert_db_record,
                           ssl_cert_chain_db_record=cert_chain_db_record,
                           ssl_key_db_record=key_db_record,
-                          vip_db_record=vip_db_record, service=service),
+                          vip_db_record=vip_db_record,
+                          cert_delete_flag=cert_delete_flag,
+                          cert_chain_delete_flag=cert_chain_delete_flag,
+                          key_delete_flag=key_delete_flag,
+                          service=service),
             topic='%s.%s' % (self.topic, host)
         )
 
@@ -1481,7 +1486,10 @@ class F5PluginDriver(abstract_driver.LoadBalancerAbstractDriver,
     @log.log
     def delete_vip_ssl_certificate_association(self, context, assoc_db_record,
                                                cert_db_record, key_db_record,
-                                               vip_db_record, cert_chain_db_record=None):
+                                               vip_db_record, cert_chain_db_record=None,
+                                               cert_delete_flag=True,
+                                               cert_chain_delete_flag=True,
+                                               key_delete_flag=True):
         pool_id = vip_db_record['pool_id']
         agent = self.get_pool_agent(context, pool_id)
 
@@ -1498,11 +1506,47 @@ class F5PluginDriver(abstract_driver.LoadBalancerAbstractDriver,
 
         self.agent_rpc.disassociate_vip_ssl_cert(context, assoc_db_record, cert_db_record,
                                                   key_db_record, vip_db_record, agent['host'],
-                                                  service, cert_chain_db_record)
+                                                  service, cert_chain_db_record,
+                                                  cert_delete_flag, cert_chain_delete_flag,
+                                                  key_delete_flag)
 
+    #Unused
     @log.log
     def update_ssl_certificate(self, context):
         pass
+
+    #Unused
+    @log.log
+    def udpate_ssl_certificate_chain(self, context):
+        pass
+
+    #Unused
+    @log.log
+    def update_ssl_certificate_key(self, context):
+        pass
+
+    #Unused
+    @log.log
+    def update_vip_ssl_certificate_association(self, context, assoc_db_record,
+                                               cert_db_record, key_db_record,
+                                               vip_db_record, cert_chain_db_record):
+        pool_id = vip_db_record['pool_id']
+        agent = self.get_pool_agent(context, pool_id)
+
+        # populate a pool structure for the rpc message
+        pool = self._get_pool(context, pool_id)
+
+        # get the complete service definition from the data model
+        # service is a current cache entry for a vip.
+        service = self.callbacks.get_service_by_pool_id(context,
+                            pool_id=pool_id,
+                            global_routed_mode=self._is_global_routed(agent),
+                            activate=False,
+                            host=agent['host'])
+
+        self.agent_rpc.update_vip_ssl_certificate_association(context, assoc_db_record,
+                                                              cert_db_record, key_db_record,
+                                                              vip_db_record, cert_chain_db_record)
 
     @log.log
     def stats(self, context, pool_id):

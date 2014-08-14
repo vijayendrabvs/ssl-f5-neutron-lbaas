@@ -308,11 +308,15 @@ class iControlDriver(object):
     @is_connected
     def disassociate_vip_ssl_cert(self, assoc_db_record, ssl_cert_db_record,
                                ssl_cert_chain_db_record, ssl_key_db_record,
-                               vip_db_record, service):
+                               vip_db_record, cert_delete_flag,
+                               cert_chain_delete_flag, key_delete_flag,
+                               service):
         self._assure_service(service)
         self._disassociate_vip_ssl_cert(assoc_db_record, ssl_cert_db_record,
                                      ssl_cert_chain_db_record, ssl_key_db_record,
-                                     vip_db_record, service)
+                                     vip_db_record, cert_delete_flag,
+                                     cert_chain_delete_flag, key_delete_flag,
+                                     service)
 
     @serialized('create_vip')
     @is_connected
@@ -528,7 +532,9 @@ class iControlDriver(object):
 
     def _disassociate_vip_ssl_cert(self, assoc_db_record, ssl_cert_db_record,
                                 ssl_cert_chain_db_record, ssl_key_db_record,
-                                vip_db_record, service):
+                                vip_db_record, cert_delete_flag,
+                                cert_chain_delete_flag, key_delete_flag,
+                                service):
         if not service['pool']:
             return
         bigip = self._get_bigip()
@@ -554,6 +560,9 @@ class iControlDriver(object):
             cert_chain = ssl_cert_chain_db_record['cert_chain']
         else:
             cert_chain = None
+        cert_chain_name = None
+        if cert_chain:
+            cert_chain_name = "cert_chain_uuid_" + ssl_cert_id
         for lb in bigips:
             on_last_lb = (lb is bigips[-1])
             try:
@@ -562,6 +571,15 @@ class iControlDriver(object):
                 cssl_profile_name = "uuid_cssl_profile_" + assoc_id
                 vip_name = "uuid_" + vip_id
                 lb.ssl.disassociate_cssl_profile(vip_name, cssl_profile_name, folder)
+                lb.ssl.delete_cssl_profile(cssl_profile_name, folder) 
+                if cert_delete_flag:
+                    lb.ssl.delete_cert(cert_name, folder)
+                if cert_chain_delete_flag and cert_chain_name:
+                    lb.ssl.delete_intermediate_cert(cert_chain_name, folder)
+                # We don't have to delete a key explicitly for an F5 device.
+                # It's part of the ssl cert creation. Still we keep the entities
+                # in the signature since the driver implementation may differ
+                # between vendors and we need to be as generic as possible.
                 if on_last_lb:
                     self.plugin_rpc.delete_vip_ssl_cert_assoc(assoc_id)
             except Exception as e:

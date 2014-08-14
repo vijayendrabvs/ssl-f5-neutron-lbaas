@@ -632,14 +632,22 @@ class LbaasAgentManager(periodic_task.PeriodicTasks):
                                   ssl_cert_db_record,
                                   ssl_cert_chain_db_record,
                                   ssl_key_db_record,
-                                  vip_db_record,service):
+                                  vip_db_record,
+                                  cert_delete_flag,
+                                  cert_chain_delete_flag,
+                                  key_delete_flag,
+                                  service):
         """ Handle RPC cast from plugin to disassociate_vip_ssl_cert """
         try:
             self.driver.disassociate_vip_ssl_cert(assoc_db_record,
                                                   ssl_cert_db_record,
                                                   ssl_cert_chain_db_record,
                                                   ssl_key_db_record,
-                                                  vip_db_record, service)
+                                                  vip_db_record,
+                                                  cert_delete_flag,
+                                                  cert_chain_delete_flag,
+                                                  key_delete_flag,
+                                                  service)
             self.cache.put(service)
         except Exception as e:
             message = 'could not disassociate VIP with ssl cert: ' + e.message
