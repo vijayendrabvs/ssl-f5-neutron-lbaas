@@ -433,7 +433,7 @@ class LbaasAgentManager(periodic_task.PeriodicTasks):
             self.cache.put(service)
         except Exception as e:
             message = 'could not create VIP:' + e.message
-            self.plugin_rpc.update_vip_status(vip['id'],
+            self.plugin_rpc.update_vip_status(vip['id'], vip['address'],
                                               plugin_const.ERROR,
                                               message)
 
@@ -445,7 +445,7 @@ class LbaasAgentManager(periodic_task.PeriodicTasks):
             self.cache.put(service)
         except Exception as e:
             message = 'could not update VIP: ' + e.message
-            self.plugin_rpc.update_vip_status(vip['id'],
+            self.plugin_rpc.update_vip_status(vip['id'], vip['address'],
                                               plugin_const.ERROR,
                                               message)
 
@@ -457,7 +457,7 @@ class LbaasAgentManager(periodic_task.PeriodicTasks):
             self.cache.put(service)
         except Exception as e:
             message = 'could not delete VIP:' + e.message
-            self.plugin_rpc.update_vip_status(vip['id'],
+            self.plugin_rpc.update_vip_status(vip['id'], vip['address'],
                                               plugin_const.ERROR,
                                               message)
 

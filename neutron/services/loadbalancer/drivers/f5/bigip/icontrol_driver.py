@@ -1359,7 +1359,7 @@ class iControlDriver(object):
                         self.__vips_on_traffic_groups[vip_tg] += 1
                         if on_last_bigip:
                             self.plugin_rpc.update_vip_status(
-                                            vip['id'],
+                                            vip['id'], vip_ip=ip_address,
                                             status=plugin_const.ACTIVE,
                                             status_description='vip created')
                         just_added_vip = True
@@ -1383,7 +1383,7 @@ class iControlDriver(object):
                         self.__vips_on_traffic_groups[vip_tg] += 1
                         if on_last_bigip:
                             self.plugin_rpc.update_vip_status(
-                                            vip['id'],
+                                            vip['id'], vip_ip=ip_address,
                                             status=plugin_const.ACTIVE,
                                             status_description='vip created')
                         just_added_vip = True
@@ -1590,7 +1590,7 @@ class iControlDriver(object):
 
                     if on_last_bigip:
                         self.plugin_rpc.update_vip_status(
-                                            vip['id'],
+                                            vip['id'], vip_ip=ip_address,
                                             status=plugin_const.ACTIVE,
                                             status_description='vip updated')
 

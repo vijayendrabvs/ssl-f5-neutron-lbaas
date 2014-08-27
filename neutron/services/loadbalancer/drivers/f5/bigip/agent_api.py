@@ -181,13 +181,14 @@ class LbaasAgentApi(proxy.RpcProxy):
                 )
 
     @log.log
-    def update_vip_status(self, vip_id=None,
+    def update_vip_status(self, vip_id=None, vip_ip=None,
                            status=None, status_description=None):
         return self.call(
                          self.context,
                          self.make_msg(
                                        'update_vip_status',
                                        vip_id=vip_id,
+                                       vip_ip=vip_ip,
                                        status=status,
                                        status_description=status_description,
                                        host=self.host

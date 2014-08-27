@@ -28,6 +28,12 @@ from neutron.services.loadbalancer.drivers import abstract_driver
 from neutron.services.loadbalancer.drivers import abstract_ssl_extension_driver
 from neutron.context import get_admin_context
 from time import time
+from neutron.openstack.common.notifier import api as notifier_api
+import random
+import string
+
+from keystoneclient.v2_0.client import Client
+from keystoneclient.middleware import auth_token
 
 LOG = logging.getLogger(__name__)
 
@@ -47,10 +53,17 @@ OPTS = [
                         '.drivers.f5.agent_scheduler'
                         '.TenantScheduler'),
                help=_('Driver to use for scheduling '
-                      'pool to a default loadbalancer agent'))
+                      'pool to a default loadbalancer agent')),
+    cfg.StrOpt('vpc_dns_zone_names',
+                default='',
+                help='VPC to DNS zone name mapping.'),
 ]
 
+KEYSTONE_OPTS = auth_token.opts
+
 cfg.CONF.register_opts(OPTS)
+cfg.CONF.register_opts(KEYSTONE_OPTS, group='keystone_authtoken')
+
 
 # topic name for this particular agent implementation
 TOPIC_PROCESS_ON_HOST = 'q-f5-lbaas-process-on-host'
@@ -70,6 +83,16 @@ class LoadBalancerCallbacks(object):
         self.subnet_cache = {}
 
         self.last_cache_update = datetime.datetime.now()
+        self.authhost = cfg.CONF.keystone_authtoken['auth_host']
+        self.keystone_admin_username = cfg.CONF.keystone_authtoken['admin_user']
+        self.keystone_pwd = cfg.CONF.keystone_authtoken['admin_password']
+        self.keystone_tenant_name = cfg.CONF.keystone_authtoken['admin_tenant_name']
+        self.auth_uri = "http://" + self.authhost + ":5000/v2.0"
+
+        self.keystone_client = Client(username=self.keystone_admin_username,
+                                    password=self.keystone_pwd,
+                                    tenant_name=self.keystone_tenant_name,
+                                    auth_url=self.auth_uri)
 
     @log.log
     def get_active_pool_ids(self, context, host=None):
@@ -783,7 +806,7 @@ class LoadBalancerCallbacks(object):
                         self.delete_port(context, port)
 
     @log.log
-    def update_vip_status(self, context, vip_id=None,
+    def update_vip_status(self, context, vip_id=None, vip_ip=None,
                            status=constants.ERROR, status_description=None,
                            host=None):
         """Agent confirmation hook to update VIP status."""
@@ -795,6 +818,41 @@ class LoadBalancerCallbacks(object):
                                   vip_id,
                                   status,
                                   status_description)
+        # Send notification on AMQP.
+        # Append a 5 character unique string to vip_name
+        # since multiple users can assign the same vip name.
+        str = ''.join(random.choice(string.ascii_lowercase + string.digits) for _ in range(5))
+        vip_name = vip['name'] + '-' + str
+
+        # Also, get the zone name of this VPC.
+        # First, we have the tenant.. we need to get the vpc that this tenant
+        # belongs to. And we can do this using keystone tenant-get <tenant_id>
+        tenant_info = self.keystone_client.tenants.get(tenant_id=vip['tenant_id'])
+        tenant_info_dict = tenant_info.__dict__['_info']
+        if 'cos' in tenant_info_dict:
+            tenant_cos = tenant_info['cos']
+        else:
+            tenant_cos = ''
+
+        if tenant_cos:
+            # Use the tenant_cos to get the domain name for that cos.
+            vpc_dns_zone_names_list = cfg.CONF.vpc_dns_zone_names
+            tenant_dns_zone_dict = dict(kvpair.split(":") for kvpair in vpc_dns_zone_names_list.split(","))
+            tenant_dns_zone = tenant_dns_zone_dict[tenant_cos]
+        else:
+            tenant_dns_zone = ''
+
+        if status == constants.ACTIVE:
+            info = {'vip_id': vip_id,
+                    'tenant_id': vip['tenant_id'],
+                    'vip_ip': vip_ip,
+                    'vip_name': vip_name,
+                    'vip_dns_zone': tenant_dns_zone}
+            notifier_api.notify(context,
+                                notifier_api.publisher_id('notifications.info'),
+                                'lbaas.vip.create',
+                                notifier_api.CONF.default_notification_level,
+                                {'lbaas.vip': info})
 
     @log.log
     def vip_destroyed(self, context, vip_id=None, host=None):
