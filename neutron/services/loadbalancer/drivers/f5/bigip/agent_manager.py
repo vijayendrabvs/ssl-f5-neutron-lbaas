@@ -25,6 +25,7 @@ from neutron.openstack.common.rpc import dispatcher
 from neutron.services.loadbalancer.drivers.f5.bigip import agent_api
 from neutron.services.loadbalancer.drivers.f5.bigip import constants
 from neutron.services.loadbalancer.drivers.f5 import plugin_driver
+from neutron.openstack.common.notifier import api as notifier_api
 
 LOG = logging.getLogger(__name__)
 
@@ -455,6 +456,16 @@ class LbaasAgentManager(periodic_task.PeriodicTasks):
         try:
             self.driver.delete_vip(vip, service)
             self.cache.put(service)
+            # Raise notification here for consumption
+            # by Designate.
+            info = {'vip_id': vip['id'],
+                    'tenant_id': vip['tenant_id'],
+                    'vip_ip': vip['address']}
+            notifier_api.notify(context,
+                                notifier_api.publisher_id('notifications.info'),
+                                'lbaas.vip.delete',
+                                notifier_api.CONF.default_notification_level,
+                                {'lbaas.vip': info})
         except Exception as e:
             message = 'could not delete VIP:' + e.message
             self.plugin_rpc.update_vip_status(vip['id'], vip['address'],
