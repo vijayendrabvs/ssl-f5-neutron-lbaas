@@ -830,7 +830,7 @@ class LoadBalancerCallbacks(object):
         tenant_info = self.keystone_client.tenants.get(tenant_id=vip['tenant_id'])
         tenant_info_dict = tenant_info.__dict__['_info']
         if 'cos' in tenant_info_dict:
-            tenant_cos = tenant_info['cos']
+            tenant_cos = tenant_info_dict['cos']
         else:
             tenant_cos = ''
 
