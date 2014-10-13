@@ -97,7 +97,7 @@ class LogicalServiceCache(object):
         self.pool_lookup = weakref.WeakValueDictionary()
 
     def put(self, service):
-        if 'port_id' in service['vip']:
+        if 'vip' in service and 'port_id' in service['vip']:
             port_id = service['vip']['port_id']
         else:
             # No VIP... don't cache the service yet
