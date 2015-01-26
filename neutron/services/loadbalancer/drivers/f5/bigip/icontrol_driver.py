@@ -493,7 +493,11 @@ class iControlDriver(object):
         # to be fixed by F5. We're working around it.
         ssl_cert_id = ssl_cert_db_record['id']
         cert_name = "cert_uuid_" + ssl_cert_id
-        cert_chain = ssl_cert_chain_db_record['cert_chain']
+        # cert chain can be null.
+        if ssl_cert_chain_db_record:
+            cert_chain = ssl_cert_chain_db_record['cert_chain']
+        else:
+            cert_chain = None
         cert_chain_name = None
         if cert_chain:
             cert_chain_name = "cert_chain_uuid_" + ssl_cert_id
