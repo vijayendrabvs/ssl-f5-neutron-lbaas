@@ -503,8 +503,8 @@ class VirtualServer(object):
             return False
 
     def delete_uie_persist_profile(self, name=None, folder='Common'):
-        if self.uie_persist_profile_exists(name, folder):
-            self.delete_persist_profile(name, folder)
+        if self.uie_persist_profile_exists(name=name, folder=folder):
+            self.delete_persist_profile(name=name, folder=folder)
 
     @icontrol_folder
     def delete_persist_profile(self, name=None, folder='Common'):

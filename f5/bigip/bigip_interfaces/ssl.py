@@ -50,7 +50,7 @@ class SSL(object):
     def __init__(self, bigip):
         self.bigip = bigip
 
-    @icontrol_folder
+    @icontrol_rest_folder
     def import_ssl_cert(self, cert, key, cert_name, folder='Common'):
         folder_path = '/' + folder
         # self.bigipSOAP.System.Session.set_active_folder(folder_path)
@@ -61,14 +61,15 @@ class SSL(object):
             mode='MANAGEMENT_MODE_DEFAULT',
             cert_ids=[cert_name],
             pem_data=[cert],
-            overwrite=True)
+            overwrite=False)
         self.bigip.icontrol.Management.KeyCertificate.key_import_from_pem(
             mode='MANAGEMENT_MODE_DEFAULT',
             key_ids=[cert_name],
             pem_data=[key],
-            overwrite=True)
+            overwrite=False)
 
-    def delete_cert(self, cert_name, folder):
+    @icontrol_rest_folder
+    def delete_cert(self, cert_name, folder='Common'):
         cert_path = '~' + folder + '~' + cert_name + '.crt'
         key_path = '~' + folder + '~' + cert_name + '.key'
         self.bigip.bigipREST.delete(
@@ -78,6 +79,7 @@ class SSL(object):
             '%s/sys/crypto/key/%s' %
             (self.bigip.bigipREST_url_base, key_path))
 
+    @icontrol_rest_folder
     def import_intermediate_cert(self, cert, cert_name, folder='Common'):
         folder_path = '/' + folder
         self.bigip.icontrol.System.Session.set_active_folder(folder_path)
@@ -85,14 +87,16 @@ class SSL(object):
             mode='MANAGEMENT_MODE_DEFAULT',
             cert_ids=[cert_name],
             pem_data=[cert],
-            overwrite=True)
+            overwrite=False)
 
-    def delete_intermediate_cert(self, cert_name, folder):
+    @icontrol_rest_folder
+    def delete_intermediate_cert(self, cert_name, folder='Common'):
         cert_path = '~' + folder + '~' + cert_name + '.crt'
         self.bigip.bigipREST.delete(
             '%s/sys/crypto/cert/%s' %
             (self.bigip.bigipREST_url_base, cert_path))
 
+    @icontrol_rest_folder
     def create_cssl_profile(
             self,
             cssl_profile_name,
@@ -123,12 +127,25 @@ class SSL(object):
         print rc
         ##self.bigipSOAP.post('%s/ltm/profile/client-ssl' % self.bigipREST_url_base, data=json.dumps(payload))
 
-    def delete_cssl_profile(self, cssl_profile_name, folder):
+    @icontrol_rest_folder
+    def get_cssl_profile(self, cssl_profile_name, folder='Common'):
+        cssl_profile_path = '~' + folder + '~' + cssl_profile_name
+        response = self.bigip.bigipREST.get(
+            '%s/ltm/profile/client-ssl/%s' %
+            (self.bigip.bigipREST_url_base, cssl_profile_path))
+        if response.status_code < 400:
+            response_obj = json.loads(response.text)
+            return response_obj
+        return False
+
+    @icontrol_rest_folder
+    def delete_cssl_profile(self, cssl_profile_name, folder='Common'):
         cssl_profile_path = '~' + folder + '~' + cssl_profile_name
         self.bigip.bigipREST.delete(
             '%s/ltm/profile/client-ssl/%s' %
             (self.bigip.bigipREST_url_base, cssl_profile_path))
 
+    @icontrol_rest_folder
     def associate_cssl_profile(
             self, virtual_server_name, cssl_profile_name, folder='Common'):
         virtual_server_path = '~' + folder + '~' + virtual_server_name
@@ -142,6 +159,7 @@ class SSL(object):
              virtual_server_path),
             data=json.dumps(payload))
 
+    @icontrol_rest_folder
     def disassociate_cssl_profile(
             self, virtual_server_name, cssl_profile_name, folder='Common'):
         virtual_server_path = '~' + folder + '~' + virtual_server_name

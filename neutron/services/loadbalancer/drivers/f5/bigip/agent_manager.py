@@ -622,6 +622,7 @@ class LbaasAgentManager(periodic_task.PeriodicTasks):
     @log.log
     def associate_vip_ssl_cert(self, context,
                                assoc_db_record,
+                               ssl_profile_db_record,
                                ssl_cert_db_record,
                                ssl_cert_chain_db_record,
                                ssl_key_db_record,
@@ -629,6 +630,7 @@ class LbaasAgentManager(periodic_task.PeriodicTasks):
         """ Handle RPC cast from plugin to associate_vip_ssl_cert """
         try:
             self.driver.associate_vip_ssl_cert(assoc_db_record,
+                                               ssl_profile_db_record,
                                                ssl_cert_db_record,
                                                ssl_cert_chain_db_record,
                                                ssl_key_db_record,
@@ -640,6 +642,7 @@ class LbaasAgentManager(periodic_task.PeriodicTasks):
     @log.log
     def disassociate_vip_ssl_cert(self, context,
                                   assoc_db_record,
+                                  ssl_profile_db_record,
                                   ssl_cert_db_record,
                                   ssl_cert_chain_db_record,
                                   ssl_key_db_record,
@@ -651,6 +654,7 @@ class LbaasAgentManager(periodic_task.PeriodicTasks):
         """ Handle RPC cast from plugin to disassociate_vip_ssl_cert """
         try:
             self.driver.disassociate_vip_ssl_cert(assoc_db_record,
+                                                  ssl_profile_db_record,
                                                   ssl_cert_db_record,
                                                   ssl_cert_chain_db_record,
                                                   ssl_key_db_record,

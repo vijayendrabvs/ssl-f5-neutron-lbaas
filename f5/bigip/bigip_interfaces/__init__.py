@@ -8,13 +8,15 @@
 
 import netaddr
 import os
+from oslo.config import cfg
 
-OBJ_PREFIX = 'uuid_'
-
+# if uuids are used as names then prefix them with 'uuid_'
+OBJ_PREFIX = '' if cfg.CONF.icontrol_use_name_for_uuid else 'uuid_'
+use_common_partition = cfg.CONF.icontrol_use_common_folder
 
 def prefixed(name):
     if not name.startswith(OBJ_PREFIX):
-        name = OBJ_PREFIX + name
+       name = OBJ_PREFIX + name
     return name
 
 
@@ -35,6 +37,9 @@ def icontrol_folder(method):
     decoration honors that full path.
     """
     def wrapper(*args, **kwargs):
+        if use_common_partition:
+            if 'folder' in kwargs:
+                kwargs['folder'] = 'Common'
         instance = args[0]
         if 'folder' in kwargs:
             if kwargs['folder'].find('~') > -1:
@@ -109,6 +114,9 @@ def icontrol_rest_folder(method):
     prefix OBJ_PREFIX.
     """
     def wrapper(*args, **kwargs):
+        if use_common_partition:
+            if 'folder' in kwargs:
+                kwargs['folder'] = 'Common'
         if 'folder' in kwargs:
             if kwargs['folder'].find('Common') < 0:
                 if kwargs['folder'].find('~') > -1:
@@ -268,7 +276,7 @@ def strip_folder_and_prefix(path):
         for i in range(len(path)):
             if path[i].find('~') > -1:
                 path[i] = path[i].replace('~', '/')
-            if path[i].startswith('/Common'):
+            if (not use_common_partition) and path[i].startswith('/Common'):
                 path[i] = path[i].replace(OBJ_PREFIX, '')
             else:
                 path[i] = \
@@ -277,7 +285,7 @@ def strip_folder_and_prefix(path):
     else:
         if path.find('~') > -1:
             path = path.replace('~', '/')
-        if path.startswith('/Common'):
+        if (not use_common_partition) and path.startswith('/Common'):
             return str(path).replace(OBJ_PREFIX, '')
         else:
             return os.path.basename(str(path)).replace(OBJ_PREFIX, '')

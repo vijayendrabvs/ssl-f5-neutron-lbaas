@@ -79,9 +79,16 @@ class Pool(object):
     @icontrol_folder
     def get_members(self, name=None, folder='Common'):
         members = []
+        node_names = []
         for member in self.lb_pool.get_member_v2([name])[0]:
             addr = os.path.basename(member.address)
+            node_names.append(addr)
             members.append({'addr': addr, 'port': member.port})
+        if len(members) > 0:
+            # above call returns the name of nodes. but we need IP address
+            node_addresses = self.lb_node.get_address(node_names)
+            for i in range(len(members)):
+                members[i]['addr'] = node_addresses[i]
 
         return members
 
@@ -150,14 +157,17 @@ class Pool(object):
                                   ip_address=ip_address,
                                   port=port,
                                   folder=folder)):
-            addr_port_seq = self._get_addr_port_seq(ip_address, port)
             try:
+                node_name = self.get_node_name_by_address(node_ip_address=ip_address, folder=folder)
+                if not node_name:
+                    node_name = ip_address
+                addr_port_seq = self._get_addr_port_seq(node_name, port)
                 self.lb_pool.add_member_v2([name], [addr_port_seq])
             except WebFault as wf:
                 if "already exists in partition" in str(wf.message):
                     Log.error('Pool',
                               'tried to create a Pool member when exists')
-                    return False
+                    return True
                 else:
                     raise wf
             return True
@@ -174,7 +184,11 @@ class Pool(object):
                                   ip_address=ip_address,
                                   port=port,
                                   folder=folder)):
-            addr_port_seq = self._get_addr_port_seq(ip_address, port)
+            node_name = self.get_node_name_by_address(
+                node_ip_address=ip_address, folder=folder)
+            if not node_name:
+                node_name = ip_address
+            addr_port_seq = self._get_addr_port_seq(node_name, port)
             state_seq = self.lb_pool.typefactory.create(
                                                     'Common.StringSequence')
             state_seq.values = ['STATE_ENABLED']
@@ -200,7 +214,10 @@ class Pool(object):
                                   ip_address=ip_address,
                                   port=port,
                                   folder=folder)):
-            addr_port_seq = self._get_addr_port_seq(ip_address, port)
+            node_name = self.get_node_name_by_address(node_ip_address=ip_address, folder=folder)
+            if not node_name:
+                node_name = ip_address
+            addr_port_seq = self._get_addr_port_seq(node_name, port)
             state_seq = self.lb_pool.typefactory.create(
                                                     'Common.StringSequence')
             state_seq.values = ['STATE_DISABLED']
@@ -226,7 +243,10 @@ class Pool(object):
                                   ip_address=ip_address,
                                   port=port,
                                   folder=folder)):
-            addr_port_seq = self._get_addr_port_seq(ip_address, port)
+            node_name = self.get_node_name_by_address(node_ip_address=ip_address, folder=folder)
+            if not node_name:
+                node_name = ip_address
+            addr_port_seq = self._get_addr_port_seq(node_name, port)
             self.lb_pool.set_member_ratio([name],
                                           [addr_port_seq],
                                           [{'long': [ratio]}])
@@ -238,10 +258,14 @@ class Pool(object):
     @domain_address
     def remove_member(self, name=None, ip_address=None,
                       port=None, folder='Common'):
+        node_name = self.get_node_name_by_address(node_ip_address=ip_address, folder=folder)
+        if not node_name:
+            node_name = ip_address
+
         if self.exists(name=name, folder=folder) and \
-           self.member_exists(name=name, ip_address=ip_address,
+           self.member_exists(name=name, ip_address=strip_folder_and_prefix(node_name),
                               port=port, folder=folder):
-            addr_port_seq = self._get_addr_port_seq(ip_address, port)
+            addr_port_seq = self._get_addr_port_seq(node_name, port)
             self.lb_pool.remove_member_v2([name], [addr_port_seq])
 
             # node address might have multiple pool members
@@ -312,6 +336,18 @@ class Pool(object):
             for i in range(len(node_addresses)):
                 node_addresses[i] = node_addresses[i].split('%')[0]
         return node_addresses
+
+    @icontrol_folder
+    def get_node_name_by_address(self,
+                               node_ip_address=None,
+                               folder='Common'):
+        nodes = self.lb_node.get_list()
+        if len(nodes) > 0:
+            node_addresses = self.lb_node.get_address(nodes)
+            for i in range(len(node_addresses)):
+                if node_addresses[i] == node_ip_address:
+                    return nodes[i]
+        return None
 
     @icontrol_folder
     def get_service_down_action(self, name=None, folder='Common'):
@@ -535,3 +571,17 @@ class Pool(object):
         #    if os.path.basename(member.address) == ip_address and \
         #       int(member.port) == port:
         #        return True
+
+
+    @icontrol_rest_folder
+    @domain_address
+    def get_node_name(self, ip_address=None, folder='Common'):
+        request_url = self.bigip.icr_url + '/ltm/node/'
+        # request_url += '~' + folder + '~' + ip_address
+        response = self.bigip.icr_session.get(request_url)
+        if response.status_code < 400:
+            response_obj = json.loads(response.text)
+            for item in response_obj.items:
+                if item.address == ip_address:
+                    return item.name
+        return None

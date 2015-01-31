@@ -57,6 +57,12 @@ OPTS = [
     cfg.StrOpt('vpc_dns_zone_names',
                 default='',
                 help='VPC to DNS zone name mapping.'),
+    cfg.BoolOpt('icontrol_use_common_folder',
+                default=True,
+                help=_('If set to true, will create all LB entities under /Common/ on LB device')),
+    cfg.BoolOpt('icontrol_use_name_for_uuid',
+                default=True,
+                help=_('If set to true, will create all LB entities under /Common/ on LB device')),
 ]
 
 KEYSTONE_OPTS = auth_token.opts
@@ -116,9 +122,12 @@ class LoadBalancerCallbacks(object):
                                                   'id': pool_ids,
                                                   'admin_state_up': [up]
                                                   },
-                                         fields=['id'])
+                                         fields=['id', 'name'])
             for pool in pools:
-                active_pool_ids.add(pool['id'])
+                if cfg.CONF.icontrol_use_name_for_uuid:
+                    active_pool_ids.add(pool['name'])
+                else:
+                    active_pool_ids.add(pool['id'])
             return active_pool_ids
 
     @log.log
@@ -171,6 +180,13 @@ class LoadBalancerCallbacks(object):
                 if member['status'] != constants.ACTIVE:
                     pools_to_update.add(member['pool_id'])
 
+            if cfg.CONF.icontrol_use_name_for_uuid:
+                named_pools = self.plugin.get_pools(context,
+                         filters={
+                                  'id': list(pools_to_update),
+                                  }
+                          )
+                return [pool['name'] for pool in named_pools]
             return list(pools_to_update)
 
     @log.log
@@ -842,12 +858,17 @@ class LoadBalancerCallbacks(object):
         else:
             tenant_dns_zone = ''
 
+        # Check if the vip_ip has a %0 as the trailing characters
+        # and remove them if they are present.
+        if vip_ip[-2:] == '%0':
+            vip_ip = vip_ip[:-2]
         if status == constants.ACTIVE:
             info = {'vip_id': vip_id,
                     'tenant_id': vip['tenant_id'],
                     'vip_ip': vip_ip,
                     'vip_name': vip_name,
-                    'vip_dns_zone': tenant_dns_zone}
+                    'vip_dns_zone': tenant_dns_zone,
+                    'vip_cos': tenant_cos}
             notifier_api.notify(context,
                                 notifier_api.publisher_id('notifications.info'),
                                 'lbaas.vip.create',
@@ -1127,13 +1148,14 @@ class LoadBalancerAgentApi(proxy.RpcProxy):
         )
 
     @log.log
-    def associate_vip_ssl_cert(self, context, assoc_db_record, cert_db_record,
-                               cert_chain_db_record, key_db_record,
+    def associate_vip_ssl_cert(self, context, assoc_db_record, ssl_profile_db_record,
+                               cert_db_record, cert_chain_db_record, key_db_record,
                                vip_db_record, host, service):
         return self.cast(
             context,
             self.make_msg('associate_vip_ssl_cert',
                           assoc_db_record=assoc_db_record,
+                          ssl_profile_db_record=ssl_profile_db_record,
                           ssl_cert_db_record=cert_db_record,
                           ssl_cert_chain_db_record=cert_chain_db_record,
                           ssl_key_db_record=key_db_record,
@@ -1142,16 +1164,17 @@ class LoadBalancerAgentApi(proxy.RpcProxy):
         )
 
     @log.log
-    def disassociate_vip_ssl_cert(self, context, assoc_db_record, cert_db_record,
-                               key_db_record, vip_db_record, host, service,
-                               cert_chain_db_record=None, cert_delete_flag=True,
-                               cert_chain_delete_flag=True, key_delete_flag=True):
+    def disassociate_vip_ssl_cert(self, context, assoc_db_record, ssl_profile_db_record,
+                                  cert_db_record, key_db_record, vip_db_record, host, service,
+                                  cert_chain_db_record=None, cert_delete_flag=True,
+                                  cert_chain_delete_flag=True, key_delete_flag=True):
         if not cert_chain_db_record:
             cert_chain_db_record = {}
         return self.cast(
             context,
             self.make_msg('disassociate_vip_ssl_cert',
                           assoc_db_record=assoc_db_record,
+                          ssl_profile_db_record=ssl_profile_db_record,
                           ssl_cert_db_record=cert_db_record,
                           ssl_cert_chain_db_record=cert_chain_db_record,
                           ssl_key_db_record=key_db_record,
@@ -1516,10 +1539,9 @@ class F5PluginDriver(abstract_driver.LoadBalancerAbstractDriver,
                                                   agent['host'])
 
     @log.log
-    def create_vip_ssl_certificate_association(self, context, assoc_db_record,
-                                               cert_db_record,key_db_record,
+    def create_vip_ssl_certificate_association(self, context, assoc_db_record, ssl_profile_db_record,
+                                               cert_db_record, key_db_record,
                                                vip_db_record, cert_chain_db_record=None):
-        # For now, we allow only one ssl cert to be associated with a vip at one time.
         # which agent should handle provisioning
         pool_id = vip_db_record['pool_id']
         agent = self.get_pool_agent(context, pool_id)
@@ -1537,12 +1559,12 @@ class F5PluginDriver(abstract_driver.LoadBalancerAbstractDriver,
 
         # As of now, we don't support ssl policies or trusted certs.
         # call the RPC proxy with the constructed message
-        self.agent_rpc.associate_vip_ssl_cert(context, assoc_db_record, cert_db_record,
+        self.agent_rpc.associate_vip_ssl_cert(context, assoc_db_record, ssl_profile_db_record, cert_db_record,
                                                   cert_chain_db_record, key_db_record,
                                                   vip_db_record, agent['host'], service)
 
     @log.log
-    def delete_vip_ssl_certificate_association(self, context, assoc_db_record,
+    def delete_vip_ssl_certificate_association(self, context, assoc_db_record, ssl_profile_db_record,
                                                cert_db_record, key_db_record,
                                                vip_db_record, cert_chain_db_record=None,
                                                cert_delete_flag=True,
@@ -1562,7 +1584,7 @@ class F5PluginDriver(abstract_driver.LoadBalancerAbstractDriver,
                             activate=False,
                             host=agent['host'])
 
-        self.agent_rpc.disassociate_vip_ssl_cert(context, assoc_db_record, cert_db_record,
+        self.agent_rpc.disassociate_vip_ssl_cert(context, assoc_db_record, ssl_profile_db_record, cert_db_record,
                                                   key_db_record, vip_db_record, agent['host'],
                                                   service, cert_chain_db_record,
                                                   cert_delete_flag, cert_chain_delete_flag,
@@ -1586,6 +1608,7 @@ class F5PluginDriver(abstract_driver.LoadBalancerAbstractDriver,
     #Unused
     @log.log
     def update_vip_ssl_certificate_association(self, context, assoc_db_record,
+                                               ssl_profile_db_record,
                                                cert_db_record, key_db_record,
                                                vip_db_record, cert_chain_db_record):
         pool_id = vip_db_record['pool_id']
@@ -1602,7 +1625,7 @@ class F5PluginDriver(abstract_driver.LoadBalancerAbstractDriver,
                             activate=False,
                             host=agent['host'])
 
-        self.agent_rpc.update_vip_ssl_certificate_association(context, assoc_db_record,
+        self.agent_rpc.update_vip_ssl_certificate_association(context, assoc_db_record, ssl_profile_db_record,
                                                               cert_db_record, key_db_record,
                                                               vip_db_record, cert_chain_db_record)
 

@@ -88,7 +88,8 @@ class Monitor(object):
                 self.lb_monitor.delete_template([name])
             except WebFault as wf:
                 if "is in use" in str(wf.message):
-                    return False
+                    raise wf
+                return False
             return True
         return False
 

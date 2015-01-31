@@ -29,6 +29,7 @@ import hashlib
 import random
 from time import time
 import logging as std_logging
+from suds import WebFault
 
 
 LOG = logging.getLogger(__name__)
@@ -99,6 +100,21 @@ OPTS = [
         'icontrol_connection_retry_interval',
         default=10,
         help=_('How many seconds to wait between retry connection attempts'),
+    ),
+    cfg.BoolOpt(
+        'icontrol_use_common_folder',
+        default=True,
+        help=_('If set to true, will create all LB entities under /Common/ on LB device')
+    ),
+    cfg.BoolOpt(
+        'icontrol_use_name_for_uuid',
+        default=True,
+        help=_('If set to true, will create all LB entities under /Common/ on LB device')
+    ),
+    cfg.BoolOpt(
+        'migrate_flag',
+        default=True,
+        help=_('If set to true, will set F5 lbaas agent in migrate mode')
     )
 ]
 
@@ -296,23 +312,23 @@ class iControlDriver(object):
 
     @serialized('associate_vip_ssl_cert')
     @is_connected
-    def associate_vip_ssl_cert(self, assoc_db_record, ssl_cert_db_record,
+    def associate_vip_ssl_cert(self, assoc_db_record, ssl_profile_db_record, ssl_cert_db_record,
                                ssl_cert_chain_db_record, ssl_key_db_record,
                                vip_db_record, service):
-        self._assure_service(service)
-        self._associate_vip_ssl_cert(assoc_db_record, ssl_cert_db_record,
+        # self._assure_service(service)
+        self._associate_vip_ssl_cert(assoc_db_record, ssl_profile_db_record, ssl_cert_db_record,
                                      ssl_cert_chain_db_record, ssl_key_db_record,
                                      vip_db_record, service)
 
     @serialized('disassociate_vip_ssl_cert')
     @is_connected
-    def disassociate_vip_ssl_cert(self, assoc_db_record, ssl_cert_db_record,
+    def disassociate_vip_ssl_cert(self, assoc_db_record, ssl_profile_db_record, ssl_cert_db_record,
                                ssl_cert_chain_db_record, ssl_key_db_record,
                                vip_db_record, cert_delete_flag,
                                cert_chain_delete_flag, key_delete_flag,
                                service):
-        self._assure_service(service)
-        self._disassociate_vip_ssl_cert(assoc_db_record, ssl_cert_db_record,
+        # self._assure_service(service)
+        self._disassociate_vip_ssl_cert(assoc_db_record, ssl_profile_db_record, ssl_cert_db_record,
                                      ssl_cert_chain_db_record, ssl_key_db_record,
                                      vip_db_record, cert_delete_flag,
                                      cert_chain_delete_flag, key_delete_flag,
@@ -435,10 +451,13 @@ class iControlDriver(object):
             # state which means that if those messages are queued (or delayed)
             # it can result in the process of a stats request after the pool
             # and tenant are long gone. Check if the tenant exists.
-            if not service['pool'] or not hostbigip.system.folder_exists(
+            if not service['pool']:
+                return None
+            if not self.conf.icontrol_use_common_folder and not hostbigip.system.folder_exists(
                bigip_interfaces.OBJ_PREFIX + service['pool']['tenant_id']):
                 return None
             pool = service['pool']
+            self.reset_id_name(pool)
             bigip_stats = hostbigip.pool.get_statistics(name=pool['id'],
                                                     folder=pool['tenant_id'])
             if 'STATISTIC_SERVER_SIDE_BYTES_IN' in bigip_stats:
@@ -470,9 +489,11 @@ class iControlDriver(object):
         stats['members'] = {'members': members}
         return stats
 
-    def _associate_vip_ssl_cert(self, assoc_db_record, ssl_cert_db_record,
+    def _associate_vip_ssl_cert(self, assoc_db_record, ssl_profile_db_record, ssl_cert_db_record,
                                 ssl_cert_chain_db_record, ssl_key_db_record,
                                 vip_db_record, service):
+        # profile has {'id', 'name', 'tenant_id', 'description', 'cert_id', 'cert_chain_id', 'key_id'}
+        # assoc record has {'id','name','tenant_id','vip_id','ssl_profile_id','device_ip','status''status_description'}
         if not service['pool']:
             return
         bigip = self._get_bigip()
@@ -482,50 +503,50 @@ class iControlDriver(object):
             bigips = [bigip]
 
         start_time = time()
-        assoc_id = assoc_db_record['id']
+        self.reset_id_name(vip_db_record)
+        self.reset_id_name(ssl_cert_db_record)
+        self.reset_id_name(ssl_key_db_record)
+        self.reset_id_name(ssl_cert_chain_db_record)
+        self.reset_id_name(assoc_db_record)
+        self.reset_id_name(ssl_profile_db_record)
+
+        folder = vip_db_record['tenant_id']
         vip_id = vip_db_record['id']
+        profile_id = bigip_interfaces.prefixed(ssl_profile_db_record['id'])
         key = ssl_key_db_record['key']
-        #TODO: Can tenant_id be null?
-        folder = "uuid_" + vip_db_record['tenant_id']
         ssl_cert = ssl_cert_db_record['certificate']
-        # The client ssl profile name always needs to begin with "uuid_" on
-        # an F5 LB. This is probably a bug on the F5 and needs
-        # to be fixed by F5. We're working around it.
-        ssl_cert_id = ssl_cert_db_record['id']
-        cert_name = "cert_uuid_" + ssl_cert_id
-        # cert chain can be null.
+        cert_name = bigip_interfaces.prefixed(ssl_cert_db_record['id'])
+        cert_chain = None               # cert chain can be null.
+        cert_chain_name = None          # cert chain can be null.
         if ssl_cert_chain_db_record:
             cert_chain = ssl_cert_chain_db_record['cert_chain']
-        else:
-            cert_chain = None
-        cert_chain_name = None
-        if cert_chain:
-            cert_chain_name = "cert_chain_uuid_" + ssl_cert_id
+            cert_chain_name = bigip_interfaces.prefixed(ssl_cert_chain_db_record['id'])
+
         for lb in bigips:
             on_last_lb = (lb is bigips[-1])
             try:
-                # Sanitize the ssl_cert and key for \\n.
-                lb.ssl.import_ssl_cert(ssl_cert.replace('\\n', '\n'), key.replace('\\n', '\n'), cert_name, folder)
-                if cert_chain:
-                    lb.ssl.import_intermediate_cert(cert_chain.replace('\\n', '\n'), cert_chain_name, folder)
-                # Generate a client ssl profile name
-                cssl_profile_name = "uuid_cssl_profile_" + assoc_id
-                lb.ssl.create_cssl_profile(cssl_profile_name, cert_name, cert_chain_name, folder)
+                profile = lb.ssl.get_cssl_profile(profile_id, folder=folder)
+                if not profile:
+                    # Sanitize the ssl_cert and key for \\n.
+                    lb.ssl.import_ssl_cert(ssl_cert.replace('\\n', '\n'),
+                                           key.replace('\\n', '\n'),
+                                           cert_name, folder=folder)
+                    if cert_chain:
+                        lb.ssl.import_intermediate_cert(cert_chain.replace('\\n', '\n'),
+                                                        cert_chain_name, folder=folder)
+                    lb.ssl.create_cssl_profile(profile_id, cert_name, cert_chain_name, folder=folder)
                 # Finally, associate the cssl profile with the vip.
-                # F5 creates a "uuid_""vip_id" on the device. So, use the same naming
-                # convention.
-                vip_name = "uuid_" + vip_id
-                device_ip = lb.device.get_mgmt_addr() 
-                lb.ssl.associate_cssl_profile(vip_name, cssl_profile_name, folder)
+                lb.ssl.associate_cssl_profile(vip_id, profile_id, folder=folder)
+                device_ip = lb.device.get_mgmt_addr()
                 if on_last_lb:
                     self.plugin_rpc.update_vip_ssl_cert_assoc_status(
-                                assoc_id,
+                                assoc_db_record['entity_uuid'],
                                 status=plugin_const.ACTIVE,
                                 status_description='associated on device',
                                 device_ip=device_ip)
             except Exception as e:
                 self.plugin_rpc.update_vip_ssl_cert_assoc_status(
-                            assoc_id,
+                            assoc_db_record['entity_uuid'],
                             status=plugin_const.ERROR,
                             status_description='Failed to apply certificate on device',
                             device_ip=device_ip)
@@ -534,7 +555,7 @@ class iControlDriver(object):
               (time() - start_time))
         return
 
-    def _disassociate_vip_ssl_cert(self, assoc_db_record, ssl_cert_db_record,
+    def _disassociate_vip_ssl_cert(self, assoc_db_record, ssl_profile_db_record, ssl_cert_db_record,
                                 ssl_cert_chain_db_record, ssl_key_db_record,
                                 vip_db_record, cert_delete_flag,
                                 cert_chain_delete_flag, key_delete_flag,
@@ -548,47 +569,42 @@ class iControlDriver(object):
             bigips = [bigip]
 
         start_time = time()
-        assoc_id = assoc_db_record['id']
+        self.reset_id_name(vip_db_record)
+        self.reset_id_name(ssl_cert_db_record)
+        self.reset_id_name(ssl_cert_chain_db_record)
+        self.reset_id_name(assoc_db_record)
+        self.reset_id_name(ssl_profile_db_record)
+
+        folder = vip_db_record['tenant_id']
         vip_id = vip_db_record['id']
-        key = ssl_key_db_record['key']
-        #TODO: Can tenant_id be null?
-        folder = "uuid_" + vip_db_record['tenant_id']
-        ssl_cert = ssl_cert_db_record['certificate']
-        # The client ssl profile name always needs to begin with "uuid_" on
-        # an F5 LB. This is probably a bug on the F5 and needs
-        # to be fixed by F5. We're working around it.
-        ssl_cert_id = ssl_cert_db_record['id']
-        cert_name = "cert_uuid_" + ssl_cert_id
-        if bool(ssl_cert_chain_db_record):
-            #Non empty
-            cert_chain = ssl_cert_chain_db_record['cert_chain']
-        else:
-            cert_chain = None
+        profile_id = bigip_interfaces.prefixed(ssl_profile_db_record['id'])
+        cert_name = bigip_interfaces.prefixed(ssl_cert_db_record['id'])
         cert_chain_name = None
-        if cert_chain:
-            cert_chain_name = "cert_chain_uuid_" + ssl_cert_id
+        if bool(ssl_cert_chain_db_record):
+            cert_chain_name = bigip_interfaces.prefixed(ssl_cert_chain_db_record['id'])
+
         for lb in bigips:
             on_last_lb = (lb is bigips[-1])
             try:
-                # Generate the client ssl profile name in the same way
-                # we generated it when creating this profile.
-                cssl_profile_name = "uuid_cssl_profile_" + assoc_id
-                vip_name = "uuid_" + vip_id
-                lb.ssl.disassociate_cssl_profile(vip_name, cssl_profile_name, folder)
-                lb.ssl.delete_cssl_profile(cssl_profile_name, folder) 
-                if cert_delete_flag:
-                    lb.ssl.delete_cert(cert_name, folder)
-                if cert_chain_delete_flag and cert_chain_name:
-                    lb.ssl.delete_intermediate_cert(cert_chain_name, folder)
-                # We don't have to delete a key explicitly for an F5 device.
-                # It's part of the ssl cert creation. Still we keep the entities
-                # in the signature since the driver implementation may differ
-                # between vendors and we need to be as generic as possible.
+                lb.ssl.disassociate_cssl_profile(vip_id, profile_id, folder=folder)
+                try:
+                    lb.ssl.delete_cssl_profile(profile_id, folder=folder)
+                    if cert_delete_flag:
+                        lb.ssl.delete_cert(cert_name, folder=folder)
+                    if cert_chain_delete_flag and cert_chain_name:
+                        lb.ssl.delete_intermediate_cert(cert_chain_name, folder=folder)
+                    # We don't have to delete a key explicitly for an F5 device.
+                    # It's part of the ssl cert creation. Still we keep the entities
+                    # in the signature since the driver implementation may differ
+                    # between vendors and we need to be as generic as possible.
+                except Exception as e:
+                    # cert might be in use by other vips. ignore delete exception
+                    pass
                 if on_last_lb:
-                    self.plugin_rpc.delete_vip_ssl_cert_assoc(assoc_id)
+                    self.plugin_rpc.delete_vip_ssl_cert_assoc(assoc_db_record['entity_uuid'])
             except Exception as e:
                 self.plugin_rpc.update_vip_ssl_cert_assoc_status(
-                            assoc_id,
+                            assoc_db_record['entity_uuid'],
                             status=plugin_const.ERROR,
                             status_description='Failed to disassociate vip and certificate on device', device_ip=None)
                 raise f5ex.DisassociateSSLCertFailedException(e.message)
@@ -719,6 +735,7 @@ class iControlDriver(object):
     # called for every bigip only in replication mode.
     # otherwise called once
     def _assure_device_pool_create(self, pool, bigip, on_last_bigip):
+        self.reset_id_name(pool)
         if not pool['status'] == plugin_const.PENDING_DELETE:
             desc = pool['name'] + ':' + pool['description']
             bigip.pool.create(name=pool['id'],
@@ -735,13 +752,13 @@ class iControlDriver(object):
                                            folder=pool['tenant_id'])
                 if on_last_bigip:
                     update_pool = self.plugin_rpc.update_pool_status
-                    update_pool(pool['id'],
+                    update_pool(pool['entity_uuid'],
                                 status=plugin_const.ACTIVE,
                                 status_description='pool updated')
             if pool['status'] == plugin_const.PENDING_CREATE:
                 if on_last_bigip:
                     update_pool = self.plugin_rpc.update_pool_status
-                    update_pool(pool['id'],
+                    update_pool(pool['entity_uuid'],
                                 status=plugin_const.ACTIVE,
                                 status_description='pool created')
 
@@ -761,6 +778,7 @@ class iControlDriver(object):
     # otherwise called once
     def _assure_device_pool_monitors(self, service, bigip, on_last_bigip):
         pool = service['pool']
+        self.reset_id_name(pool)
         # Current monitors on the pool according to BigIP
         existing_monitors = bigip.pool.get_monitors(name=pool['id'],
                                                     folder=pool['tenant_id'])
@@ -774,17 +792,18 @@ class iControlDriver(object):
 
         # Current monitor associations according to Neutron
         for monitor in service['health_monitors']:
+            self.reset_id_name(monitor)
             found_existing_monitor = monitor['id'] in existing_monitors
-            if monitor['id'] in health_monitors_status and \
-                health_monitors_status[monitor['id']] == \
+            if monitor['entity_uuid'] in health_monitors_status and \
+                health_monitors_status[monitor['entity_uuid']] == \
                     plugin_const.PENDING_DELETE:
                 bigip.pool.remove_monitor(name=pool['id'],
                                           monitor_name=monitor['id'],
                                           folder=pool['tenant_id'])
                 if on_last_bigip:
                     self.plugin_rpc.health_monitor_destroyed(
-                        health_monitor_id=monitor['id'],
-                        pool_id=pool['id'])
+                        health_monitor_id=monitor['entity_uuid'],
+                        pool_id=pool['entity_uuid'])
                 # not sure if the monitor might be in use
                 try:
                     LOG.debug(_('Deleting %s monitor /%s/%s'
@@ -811,7 +830,7 @@ class iControlDriver(object):
                     self._update_monitor(bigip, monitor, set_times=False)
                     update_status = True
                 else:
-                    if health_monitors_status[monitor['id']] == \
+                    if health_monitors_status[monitor['entity_uuid']] == \
                             plugin_const.PENDING_UPDATE:
                         self._update_monitor(bigip, monitor)
                         update_status = True
@@ -824,23 +843,30 @@ class iControlDriver(object):
 
                 if update_status and on_last_bigip:
                     self.plugin_rpc.update_health_monitor_status(
-                                    pool_id=pool['id'],
-                                    health_monitor_id=monitor['id'],
+                                    pool_id=pool['entity_uuid'],
+                                    health_monitor_id=monitor['entity_uuid'],
                                     status=plugin_const.ACTIVE,
                                     status_description='monitor active')
 
             if found_existing_monitor:
                 existing_monitors.remove(monitor['id'])
 
-        LOG.debug(_("Pool: %s removing monitors %s"
-                    % (pool['id'], existing_monitors)))
         # get rid of monitors no longer in service definition
-        for monitor in existing_monitors:
-            bigip.monitor.delete(name=monitor,
-                                 mon_type=None,
-                                 folder=pool['tenant_id'])
+        # Do not do this if in the midst of migration, though!
+        if not self.conf.migrate_flag:
+            LOG.debug(_("Pool: %s removing monitors %s"
+                    % (pool['id'], existing_monitors)))
+            for monitor in existing_monitors:
+                try:
+                    bigip.monitor.delete(name=monitor,
+                                     mon_type=None,
+                                     folder=pool['tenant_id'])
+                except WebFault as wf:
+                    LOG.debug(_("Monitor %s is in use, so will not delete" % monitor))
+
 
     def _update_monitor(self, bigip, monitor, set_times=True):
+        self.reset_id_name(monitor)
         if set_times:
             timeout = int(monitor['max_retries']) * \
                       int(monitor['timeout'])
@@ -861,7 +887,9 @@ class iControlDriver(object):
             else:
                 send_text = "GET / HTTP/1.0\\r\\n\\r\\n"
 
-            if 'expected_codes' in monitor:
+            if 'response_string' in monitor:
+                recv_text = monitor['response_string']
+            elif 'expected_codes' in monitor:
                 try:
                     if monitor['expected_codes'].find(",") > 0:
                         status_codes = \
@@ -927,6 +955,7 @@ class iControlDriver(object):
         start_time = time()
         # Current members on the BigIP
         pool = service['pool']
+        self.reset_id_name(pool)
         existing_members = bigip.pool.get_members(
                                 name=pool['id'],
                                 folder=pool['tenant_id'])
@@ -955,7 +984,7 @@ class iControlDriver(object):
             subnet = member['subnet']
 
             if self.conf.f5_global_routed_mode:
-                ip_address = ip_address + '%0'
+                ip_address = ip_address # + '%0'
             else:
                 if not network:
                     ip_address = ip_address + '%0'
@@ -969,7 +998,7 @@ class iControlDriver(object):
             found_existing_member = None
 
             for existing_member in existing_members:
-                if (existing_member['addr'].startswith(ip_address)) and \
+                if (existing_member['addr'] == ip_address) and \
                    (member['protocol_port'] == existing_member['port']):
                     found_existing_member = existing_member
                     break
@@ -1026,6 +1055,7 @@ class iControlDriver(object):
                                                     subnet)
             else:
                 just_added = False
+                result = False
                 if not found_existing_member:
                     start_time = time()
                     result = bigip.pool.add_member(
@@ -1037,21 +1067,22 @@ class iControlDriver(object):
                     just_added = True
                     LOG.debug("           bigip.pool.add_member %s took %.5f" %
                               (ip_address, time() - start_time))
-                    if result:
-                        #LOG.debug(_("Pool: %s added member: %s:%d"
-                        #% (pool['id'],
-                        #   member['address'],
-                        #   member['protocol_port'])))
-                        if on_last_bigip:
-                            rpc = self.plugin_rpc
-                            start_time = time()
-                            rpc.update_member_status(
-                                member['id'],
-                                status=plugin_const.ACTIVE,
-                                status_description='member created')
-                            LOG.debug("            update_member_status"
-                                      " took %.5f secs" %
-                                      (time() - start_time))
+
+                if result or found_existing_member:
+                    #LOG.debug(_("Pool: %s added member: %s:%d"
+                    #% (pool['id'],
+                    #   member['address'],
+                    #   member['protocol_port'])))
+                    if on_last_bigip:
+                        rpc = self.plugin_rpc
+                        start_time = time()
+                        rpc.update_member_status(
+                            member['id'],
+                            status=plugin_const.ACTIVE,
+                            status_description='member created')
+                        LOG.debug("            update_member_status"
+                                  " took %.5f secs" %
+                                  (time() - start_time))
                 if just_added or \
                         member['status'] == plugin_const.PENDING_UPDATE:
                     # Is it enabled or disabled?
@@ -1138,15 +1169,16 @@ class iControlDriver(object):
                 LOG.debug("        assuring member %s took %.5f secs" %
                           (member['address'], time() - member_start_time))
 
-        LOG.debug(_("Pool: %s removing members %s"
-                    % (pool['id'], existing_members)))
         # remove any members which are no longer in the service
-        for need_to_delete in existing_members:
-            bigip.pool.remove_member(
-                                 name=pool['id'],
-                                 ip_address=need_to_delete['addr'],
-                                 port=int(need_to_delete['port']),
-                                 folder=pool['tenant_id'])
+        if not self.conf.migrate_flag:
+            LOG.debug(_("Pool: %s removing members %s"
+                    % (pool['id'], existing_members)))
+            for need_to_delete in existing_members:
+                bigip.pool.remove_member(
+                                     name=pool['id'],
+                                     ip_address=need_to_delete['addr'],
+                                     port=int(need_to_delete['port']),
+                                     folder=pool['tenant_id'])
         # if members are using weights, change the LB to RATIO
         start_time = time()
         if using_ratio:
@@ -1190,11 +1222,31 @@ class iControlDriver(object):
             ctx = ctxs[bigip.device_name]
             self._assure_device_vip(service, bigip, ctx, on_last_bigip)
 
+    def reset_id_name(self, entity):
+        if not entity:
+            return
+        if self.conf.icontrol_use_name_for_uuid:
+            # If config is set to use name on LB device
+            if 'entity_uuid' in entity:
+                return
+            if not 'id' in entity:
+                return
+            entity['entity_uuid'] = entity['id']
+            if not 'name' in entity:
+                return
+            temp = entity['id']
+            entity['id'] = entity['name']
+            entity['name'] = temp
+
+
     # called for every bigip only in replication mode.
     # otherwise called once
     def _assure_device_vip(self, service, bigip, ctx, on_last_bigip):
         vip = service['vip']
         pool = service['pool']
+        self.reset_id_name(pool)
+        self.reset_id_name(vip)
+
         bigip_vs = bigip.virtual_server
         if 'id' in vip:
             ip_address = vip['address']
@@ -1297,7 +1349,7 @@ class iControlDriver(object):
                             vip_tg = self.__vips_to_traffic_group[vip['id']]
                             self.__vips_on_traffic_groups[vip_tg] -= 1
                             del(self.__vips_to_traffic_group[vip['id']])
-                        self.plugin_rpc.vip_destroyed(vip['id'])
+                        self.plugin_rpc.vip_destroyed(vip['entity_uuid'])
                 except Exception as exc:
                     LOG.error(_("Plugin delete vip %s error: %s"
                                 % (vip['id'], exc.message)
@@ -1361,11 +1413,6 @@ class iControlDriver(object):
                                         folder=pool['tenant_id'])
                         self.__vips_to_traffic_group[vip['id']] = vip_tg
                         self.__vips_on_traffic_groups[vip_tg] += 1
-                        if on_last_bigip:
-                            self.plugin_rpc.update_vip_status(
-                                            vip['id'], vip_ip=ip_address,
-                                            status=plugin_const.ACTIVE,
-                                            status_description='vip created')
                         just_added_vip = True
                 else:
                     if bigip_vs.create_fastl4(
@@ -1385,11 +1432,6 @@ class iControlDriver(object):
                                         folder=pool['tenant_id'])
                         self.__vips_to_traffic_group[vip['ip']] = vip_tg
                         self.__vips_on_traffic_groups[vip_tg] += 1
-                        if on_last_bigip:
-                            self.plugin_rpc.update_vip_status(
-                                            vip['id'], vip_ip=ip_address,
-                                            status=plugin_const.ACTIVE,
-                                            status_description='vip created')
                         just_added_vip = True
 
                 if vip['status'] == plugin_const.PENDING_CREATE or \
@@ -1594,7 +1636,7 @@ class iControlDriver(object):
 
                     if on_last_bigip:
                         self.plugin_rpc.update_vip_status(
-                                            vip['id'], vip_ip=ip_address,
+                                            vip['entity_uuid'], vip_ip=ip_address,
                                             status=plugin_const.ACTIVE,
                                             status_description='vip updated')
 
@@ -1617,6 +1659,7 @@ class iControlDriver(object):
     # called for every bigip only in replication mode.
     # otherwise called once
     def _assure_device_pool_delete(self, service, bigip, on_last_bigip):
+        self.reset_id_name(service['pool'])
         # Remove the pool if it is pending delete
         if service['pool']['status'] == plugin_const.PENDING_DELETE:
             LOG.debug(_('Deleting Pool %s' % service['pool']['id']))
@@ -1624,7 +1667,7 @@ class iControlDriver(object):
                               folder=service['pool']['tenant_id'])
             try:
                 if on_last_bigip:
-                    self.plugin_rpc.pool_destroyed(service['pool']['id'])
+                    self.plugin_rpc.pool_destroyed(service['pool']['entity_uuid'])
             except Exception as exc:
                 LOG.error(_("Plugin delete pool %s error: %s"
                             % (service['pool']['id'], exc.message)
@@ -3081,8 +3124,9 @@ class iControlDriver(object):
 
         bigip_vs = bigip.virtual_server
         for folder in bigip.system.get_folders():
-            if not folder.startswith(OBJ_PREFIX):
-                continue
+            if not self.conf.icontrol_use_common_folder:
+                if not folder.startswith(OBJ_PREFIX):
+                    continue
             bigip.system.set_folder(folder)
             for virtserv in bigip_vs.lb_vs.get_list():
                 virtserv = strip_folder_and_prefix(virtserv)
@@ -3096,6 +3140,8 @@ class iControlDriver(object):
     def _sync_if_clustered(self, bigip):
         if self.conf.sync_mode == 'replication':
             return
+        # if self.conf.sync_mode == 'autosync':
+        #     return
         if len(bigip.group_bigips) > 1:
             if not hasattr(bigip, 'device_group'):
                 bigip.device_group = bigip.device.get_device_group()
@@ -3109,6 +3155,9 @@ class iControlDriver(object):
             try:
                 if attempt != 1:
                     force_now = False
+                if attempts > 1 and attempt == attempts:
+                    # make it force sync on the last attempt
+                    force_now = True
                 bigip.cluster.sync(bigip.device_group, force_now=force_now)
                 LOG.debug('Cluster synced.')
                 return
