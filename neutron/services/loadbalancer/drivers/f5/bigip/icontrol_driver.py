@@ -834,7 +834,11 @@ class iControlDriver(object):
                             plugin_const.PENDING_UPDATE:
                         self._update_monitor(bigip, monitor)
                         update_status = True
-
+                    elif health_monitors_status[monitor['entity_uuid']] == \
+                            plugin_const.PENDING_CREATE:
+                        # If monitor association exists on LB, but is pending create
+                        # on neutron pool, update it's status.
+                        update_status = True
                 if not found_existing_monitor:
                     bigip.pool.add_monitor(name=pool['id'],
                                        monitor_name=monitor['id'],
