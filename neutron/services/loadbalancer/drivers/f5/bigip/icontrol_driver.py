@@ -115,6 +115,16 @@ OPTS = [
         'migrate_flag',
         default=True,
         help=_('If set to true, will set F5 lbaas agent in migrate mode')
+    ),
+    cfg.StrOpt(
+        'http_profile',
+        default='http-c3',
+        help=_('The http profile to be associated to HTTP VIPs'),
+    ),
+    cfg.StrOpt(
+        'https_profile',
+        default='https-c3',
+        help=_('The https profile to be associated to HTTPS VIPs'),
     )
 ]
 
@@ -1458,6 +1468,17 @@ class iControlDriver(object):
                         bigip_vs.disable_virtual_server(
                                     name=vip['id'],
                                     folder=pool['tenant_id'])
+                    http_profile_name = None
+                    if vip['protocol'] == 'HTTP':
+                        http_profile_name = self.conf.http_profile
+                    elif vip['protocol'] == 'HTTPS':
+                        http_profile_name = self.conf.https_profile
+                    if http_profile_name:
+                        LOG.debug('adding http/s profile to vip %s' %vip['id'])
+                        bigip_vs.add_profile(
+                            name=vip['id'],
+                            profile_name=http_profile_name,
+                            folder=vip['tenant_id'])
 
                     if 'session_persistence' in vip:
                         # branch on persistence type
@@ -1477,7 +1498,7 @@ class iControlDriver(object):
                                       ' primary cookie persistence')
                             bigip_vs.add_profile(
                                 name=vip['id'],
-                                profile_name='/Common/http',
+                                profile_name=http_profile_name,
                                 folder=vip['tenant_id'])
                             # add standard cookie persistence profile
                             bigip_vs.set_persist_profile(
@@ -1496,7 +1517,7 @@ class iControlDriver(object):
                                       ' and primary universal persistence')
                             bigip_vs.add_profile(
                                 name=vip['id'],
-                                profile_name='/Common/http',
+                                profile_name=http_profile_name,
                                 folder=vip['tenant_id'])
                             # make sure they gave us a cookie_name
                             if 'cookie_name' in vip['session_persistence']:
@@ -1560,7 +1581,7 @@ class iControlDriver(object):
                             # add an http profile
                             bigip_vs.add_profile(
                                 name=vip['id'],
-                                profile_name='/Common/http',
+                                profile_name=http_profile_name,
                                 folder=vip['tenant_id'])
                             # create the rps irule
                             rule_definition = \

@@ -280,7 +280,7 @@ class VirtualServer(object):
             return True
 
     @icontrol_folder
-    def add_profile(self, name=None, profile_name=None,
+    def add_profile(self, name=None, profile_name='/Common/http',
                     client_context=True, server_context=True,
                     folder='Common'):
         if profile_name.startswith("/Common"):
