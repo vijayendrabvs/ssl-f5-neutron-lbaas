@@ -398,6 +398,8 @@ class Pool(object):
 
             if lb_method == lb_method_type.LB_METHOD_LEAST_CONNECTION_MEMBER:
                 return 'LEAST_CONNECTIONS'
+            elif lb_method == lb_method_type.LB_METHOD_LEAST_SESSIONS:
+                return 'LEAST_SESSIONS'
             elif lb_method == lb_method_type.LB_METHOD_OBSERVED_MEMBER:
                 return 'OBSERVED_MEMBER'
             elif lb_method == lb_method_type.LB_METHOD_PREDICTIVE_MEMBER:
@@ -510,6 +512,8 @@ class Pool(object):
 
         if lb_method == 'LEAST_CONNECTIONS':
             return lb_method_type.LB_METHOD_LEAST_CONNECTION_MEMBER
+        elif lb_method == 'LEAST_SESSIONS':
+            return lb_method_type.LB_METHOD_LEAST_SESSIONS
         elif lb_method == 'RATIO_LEAST_CONNECTIONS':
             return lb_method_type.LB_METHOD_RATIO_LEAST_CONNECTION_MEMBER
         elif lb_method == 'SOURCE_IP':
